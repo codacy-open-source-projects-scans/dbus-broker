@@ -10,7 +10,7 @@ project(
         ],
         license: 'Apache',
         meson_version: '>=0.60.0',
-        version: '35',
+        version: '36',
 )
 
 cc = meson.get_compiler('c')
@@ -112,6 +112,13 @@ foreach user : use_system_console_users
 endforeach
 
 add_project_arguments('-DSYSTEM_CONSOLE_USERS=' + acc_sysusers, language: 'c')
+
+#
+# Config: tests
+#
+
+use_tests = get_option('tests')
+conf.set('testdir', get_option('prefix') / 'lib/dbus-broker/tests')
 
 #
 # Global Parameters

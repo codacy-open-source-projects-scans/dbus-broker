@@ -173,75 +173,81 @@ endif
 # target: test-*
 #
 
-test_address = executable('test-address', ['dbus/test-address.c'], dependencies: dep_bus)
-test('Address Handling', test_address)
+test_kwargs = {
+        'dependencies': dep_bus,
+        'install': use_tests,
+        'install_dir': conf.get('testdir') / 'unit',
+}
 
-test_apparmor = executable('test-apparmor', ['util/test-apparmor.c'], dependencies: dep_bus)
-test('AppArmor Handling', test_apparmor)
+test_address = executable('test-address', sources: ['dbus/test-address.c'], kwargs: test_kwargs)
+test('Address Handling', test_address, suite: 'unit')
 
-if use_launcher
-        test_config = executable('test-config', ['launch/test-config.c'], dependencies: dep_bus)
-        test('Configuration Parser', test_config)
-endif
-
-test_dirwatch = executable('test-dirwatch', ['util/test-dirwatch.c'], dependencies: dep_bus)
-test('Directory Watch', test_dirwatch)
-
-test_dispatch = executable('test-dispatch', ['util/test-dispatch.c'], dependencies: dep_bus)
-test('Event Dispatcher', test_dispatch)
-
-test_error = executable('test-error', ['util/test-error.c'], dependencies: dep_bus)
-test('Error Handling', test_error)
-
-test_fdlist = executable('test-fdlist', ['util/test-fdlist.c'], dependencies: dep_bus)
-test('Utility File-Desciptor Lists', test_fdlist)
-
-test_fs = executable('test-fs', ['util/test-fs.c'], dependencies: dep_bus)
-test('File System Helpers', test_fs)
-
-test_match = executable('test-match', ['bus/test-match.c'], dependencies: dep_bus)
-test('D-Bus Match Handling', test_match)
-
-test_message = executable('test-message', ['dbus/test-message.c'], dependencies: dep_bus)
-test('D-Bus Message Abstraction', test_message)
-
-test_misc = executable('test-misc', ['util/test-misc.c'], dependencies: dep_bus)
-test('Miscellaneous Helpers', test_misc)
-
-test_name = executable('test-name', ['bus/test-name.c'], dependencies: dep_bus)
-test('Name Registry', test_name)
+test_apparmor = executable('test-apparmor', sources: ['util/test-apparmor.c'], kwargs: test_kwargs)
+test('AppArmor Handling', test_apparmor, suite: 'unit')
 
 if use_launcher
-        test_nss_cache = executable('test-nss-cache', ['launch/test-nss-cache.c'], dependencies: dep_bus)
-        test('NSS Cache', test_nss_cache)
+        test_config = executable('test-config', sources: ['launch/test-config.c'], kwargs: test_kwargs)
+        test('Configuration Parser', test_config, suite: 'unit')
 endif
 
-test_peersec = executable('test-peersec', ['util/test-peersec.c'], dependencies: dep_bus)
-test('SO_PEERSEC Queries', test_peersec)
+test_dirwatch = executable('test-dirwatch', sources: ['util/test-dirwatch.c'], kwargs: test_kwargs)
+test('Directory Watch', test_dirwatch, suite: 'unit')
 
-test_proc = executable('test-proc', ['util/test-proc.c'], dependencies: dep_bus)
-test('Proc Utilities', test_proc)
+test_dispatch = executable('test-dispatch', sources: ['util/test-dispatch.c'], kwargs: test_kwargs)
+test('Event Dispatcher', test_dispatch, suite: 'unit')
 
-test_queue = executable('test-queue', ['dbus/test-queue.c'], dependencies: dep_bus)
-test('D-Bus I/O Queues', test_queue)
+test_error = executable('test-error', sources: ['util/test-error.c'], kwargs: test_kwargs)
+test('Error Handling', test_error, suite: 'unit')
 
-test_reply = executable('test-reply', ['bus/test-reply.c'], dependencies: dep_bus)
-test('Reply Tracking', test_reply)
+test_fdlist = executable('test-fdlist', sources: ['util/test-fdlist.c'], kwargs: test_kwargs)
+test('Utility File-Desciptor Lists', test_fdlist, suite: 'unit')
 
-test_sasl = executable('test-sasl', ['dbus/test-sasl.c'], dependencies: dep_bus)
-test('D-Bus SASL Parser', test_sasl)
+test_fs = executable('test-fs', sources: ['util/test-fs.c'], kwargs: test_kwargs)
+test('File System Helpers', test_fs, suite: 'unit')
 
-test_socket = executable('test-socket', ['dbus/test-socket.c'], dependencies: dep_bus)
-test('D-Bus Socket Abstraction', test_socket)
+test_match = executable('test-match', sources: ['bus/test-match.c'], kwargs: test_kwargs)
+test('D-Bus Match Handling', test_match, suite: 'unit')
 
-test_sockopt = executable('test-sockopt', ['util/test-sockopt.c'], dependencies: dep_bus)
-test('D-Bus Socket Options', test_sockopt)
+test_message = executable('test-message', sources: ['dbus/test-message.c'], kwargs: test_kwargs)
+test('D-Bus Message Abstraction', test_message, suite: 'unit')
 
-test_stitching = executable('test-stitching', ['dbus/test-stitching.c'], dependencies: dep_bus)
-test('Message Sender Stitching', test_stitching)
+test_misc = executable('test-misc', sources: ['util/test-misc.c'], kwargs: test_kwargs)
+test('Miscellaneous Helpers', test_misc, suite: 'unit')
 
-test_systemd = executable('test-systemd', ['util/test-systemd.c'], dependencies: dep_bus)
-test('Systemd Utilities', test_systemd)
+test_name = executable('test-name', sources: ['bus/test-name.c'], kwargs: test_kwargs)
+test('Name Registry', test_name, suite: 'unit')
 
-test_user = executable('test-user', ['util/test-user.c'], dependencies: dep_bus)
-test('User Accounting', test_user)
+if use_launcher
+        test_nss_cache = executable('test-nss-cache', sources: ['launch/test-nss-cache.c'], kwargs: test_kwargs)
+        test('NSS Cache', test_nss_cache, suite: 'unit')
+endif
+
+test_peersec = executable('test-peersec', sources: ['util/test-peersec.c'], kwargs: test_kwargs)
+test('SO_PEERSEC Queries', test_peersec, suite: 'unit')
+
+test_proc = executable('test-proc', sources: ['util/test-proc.c'], kwargs: test_kwargs)
+test('Proc Utilities', test_proc, suite: 'unit')
+
+test_queue = executable('test-queue', sources: ['dbus/test-queue.c'], kwargs: test_kwargs)
+test('D-Bus I/O Queues', test_queue, suite: 'unit')
+
+test_reply = executable('test-reply', sources: ['bus/test-reply.c'], kwargs: test_kwargs)
+test('Reply Tracking', test_reply, suite: 'unit')
+
+test_sasl = executable('test-sasl', sources: ['dbus/test-sasl.c'], kwargs: test_kwargs)
+test('D-Bus SASL Parser', test_sasl, suite: 'unit')
+
+test_socket = executable('test-socket', sources: ['dbus/test-socket.c'], kwargs: test_kwargs)
+test('D-Bus Socket Abstraction', test_socket, suite: 'unit')
+
+test_sockopt = executable('test-sockopt', sources: ['util/test-sockopt.c'], kwargs: test_kwargs)
+test('D-Bus Socket Options', test_sockopt, suite: 'unit')
+
+test_stitching = executable('test-stitching', sources: ['dbus/test-stitching.c'], kwargs: test_kwargs)
+test('Message Sender Stitching', test_stitching, suite: 'unit')
+
+test_systemd = executable('test-systemd', sources: ['util/test-systemd.c'], kwargs: test_kwargs)
+test('Systemd Utilities', test_systemd, suite: 'unit')
+
+test_user = executable('test-user', sources: ['util/test-user.c'], kwargs: test_kwargs)
+test('User Accounting', test_user, suite: 'unit')

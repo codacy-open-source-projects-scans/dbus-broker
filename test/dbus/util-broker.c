@@ -18,6 +18,10 @@
 #include "util/syscall.h"
 #include "util-broker.h"
 
+bool util_is_reference(void) {
+        return !!getenv("DBUS_BROKER_TEST_DAEMON");
+}
+
 void util_event_new(sd_event **eventp) {
         _c_cleanup_(sd_event_unrefp) sd_event *event = NULL;
         sigset_t sigold;
@@ -183,6 +187,7 @@ void util_fork_broker(sd_bus **busp, sd_event *event, int listener_fd, pid_t *pi
         _c_cleanup_(sd_bus_flush_close_unrefp) sd_bus *bus = NULL;
         _c_cleanup_(sd_bus_message_unrefp) sd_bus_message *message = NULL;
         _c_cleanup_(c_freep) char *fdstr = NULL;
+        const char *bin;
         int r, pair[2];
         pid_t pid;
 
@@ -203,8 +208,9 @@ void util_fork_broker(sd_bus **busp, sd_event *event, int listener_fd, pid_t *pi
                 r = asprintf(&fdstr, "%d", pair[1]);
                 c_assert(r >= 0);
 
-                r = execl("./src/dbus-broker",
-                          "./src/dbus-broker",
+                bin = getenv("DBUS_BROKER_TEST_BROKER") ?: "/usr/bin/dbus-broker";
+                r = execl(bin,
+                          bin,
                           "--controller", fdstr,
                           "--machine-id", "0123456789abcdef0123456789abcdef",
                           "--max-matches", "1000000",
@@ -480,9 +486,10 @@ void util_broker_spawn(Broker *broker) {
                                     buffer + strlen("unix:path="),
                                     ',',
                                     sizeof(broker->address.sun_path) - 1);
-                } else
+                } else {
                         /* Anything else is unexpected */
-                        assert(false);
+                        c_assert(false);
+                }
 
                 c_assert(e);
                 --e;
