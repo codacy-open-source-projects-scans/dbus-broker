@@ -396,16 +396,19 @@ static int policy_import_own(Policy *policy, ConfigNode *cnode) {
         } else if (cnode->parent->policy.context == CONFIG_POLICY_AT_CONSOLE) {
                 c_list_link_tail(&policy->at_console_entries.own_list, &record->link);
         } else if (cnode->parent->policy.context == CONFIG_POLICY_GROUP) {
-                r = policy_at_gid(policy, &node, cnode->parent->policy.id);
-                if (r)
-                        return error_trace(r);
+                if (cnode->parent->policy.id != (uint32_t)-1) {
+                        r = policy_at_gid(policy, &node, cnode->parent->policy.id);
+                        if (r)
+                                return error_trace(r);
 
-                c_list_link_tail(&node->entries.own_list, &record->link);
+                        c_list_link_tail(&node->entries.own_list, &record->link);
+                }
         } else {
                 c_list_link_tail(&policy->default_entries.own_list, &record->link);
         }
 
-        record = NULL;
+        if (c_list_is_linked(&record->link))
+                record = NULL;
         return 0;
 }
 
@@ -497,7 +500,8 @@ static int policy_import_send(Policy *policy, ConfigNode *cnode) {
                 c_list_link_tail(&policy->default_entries.send_list, &record->link);
         }
 
-        record = NULL;
+        if (c_list_is_linked(&record->link))
+                record = NULL;
         return 0;
 }
 
@@ -589,7 +593,8 @@ static int policy_import_recv(Policy *policy, ConfigNode *cnode) {
                 c_list_link_tail(&policy->default_entries.recv_list, &record->link);
         }
 
-        record = NULL;
+        if (c_list_is_linked(&record->link))
+                record = NULL;
         return 0;
 }
 

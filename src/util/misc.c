@@ -49,7 +49,7 @@
  *    Throw in `MFD_CLOEXEC` or `F_SEAL_SEAL` as required.
  *
  *  * If `MFD_NOEXEC_SEAL` is used without `MFD_ALLOW_SEALING`, sealing will
- *    be disabled (even though the kernel implicitly enables it).
+ *    be disabled (even though some kernel versions implicitly enable it).
  *
  *  * An initial set of seals is applied to the memfd, if specified in
  *    @seals. Note that this is not allowed if sealing was not enabled.
@@ -60,6 +60,7 @@ int misc_memfd(const char *name, unsigned int uflags, unsigned int useals) {
         _c_cleanup_(c_closep) int fd = -1;
         unsigned int flags = uflags;
         unsigned int seals = useals;
+        unsigned int kseals;
         struct stat st;
         int r;
 
@@ -111,11 +112,11 @@ int misc_memfd(const char *name, unsigned int uflags, unsigned int useals) {
         }
 
         /*
-         * If we ended up passing `MFG_NOEXEC_SEAL` to the kernel, the kernel
-         * will implicitly enable sealing. This is very unfortunate, so we
-         * revert this if the caller did not explicitly allow it. To disable
-         * sealing, simply set `F_SEAL_SEAL`, which is also what the kernel
-         * does.
+         * If we ended up passing `MFG_NOEXEC_SEAL` to the kernel, some kernel
+         * versions will implicitly enable sealing. This is very unfortunate,
+         * so we revert this if the caller did not explicitly allow it. To
+         * disable sealing, simply set `F_SEAL_SEAL`, which is also what the
+         * kernel does.
          */
         if ((flags & MISC_MFD_NOEXEC_SEAL) && !(flags & MISC_MFD_ALLOW_SEALING))
                 seals |= MISC_F_SEAL_SEAL;
@@ -126,9 +127,15 @@ int misc_memfd(const char *name, unsigned int uflags, unsigned int useals) {
          * into the kernel again.
          */
         if (seals) {
-                r = misc_memfd_add_seals(fd, seals);
+                r = misc_memfd_get_seals(fd, &kseals);
                 if (r)
                         return error_fold(r);
+
+                if (seals & ~kseals) {
+                        r = misc_memfd_add_seals(fd, seals);
+                        if (r)
+                                return error_fold(r);
+                }
         }
 
         r = fd;
@@ -167,20 +174,24 @@ int misc_memfd_add_seals(int fd, unsigned int seals) {
 /**
  * misc_memfd_get_seals() - query seals of a memfd
  * @fd:         memfd to operate on
+ * @sealsp:     output argument to store retrieved seals
  *
  * Query the seals of the memfd. If the FD does not refer to a memfd (or other
  * file that supports sealing), an error will be returned.
  *
- * Return: Seal mask of the memfd is returned, negative error code on failure.
+ * On success, the seals are written to @sealsp.
+ *
+ * Return: 0 on success, negative error code on failure.
  */
-int misc_memfd_get_seals(int fd) {
+int misc_memfd_get_seals(int fd, unsigned int *sealsp) {
         int seals;
 
         seals = fcntl(fd, MISC_F_GET_SEALS);
         if (seals < 0)
                 return error_origin(-errno);
 
-        return seals;
+        *sealsp = seals;
+        return 0;
 }
 
 /**
