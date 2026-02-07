@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <sys/apparmor.h>
 #include "bus/name.h"
+#include "dbus/protocol.h"
 #include "util/apparmor.h"
 #include "util/audit.h"
 #include "util/error.h"
@@ -42,7 +43,7 @@ int bus_apparmor_is_enabled(bool *enabledp) {
                 errno = 0;
                 if (!fgets(buffer, sizeof(buffer), f)) {
                         if (ferror(f))
-                                return error_origin(-c_errno());
+                                return error_origin(-errno);
                 }
 
                 switch (buffer[0]) {
@@ -84,7 +85,7 @@ int bus_apparmor_dbus_supported(bool *supportedp) {
                 errno = 0;
                 if (!fgets(buffer, sizeof(buffer), f)) {
                         if (ferror(f))
-                                return error_origin(-c_errno());
+                                return error_origin(-errno);
                 }
 
                 if (strstr(buffer, "acquire") && strstr(buffer, "send") && strstr(buffer, "receive"))
@@ -108,7 +109,7 @@ int bus_apparmor_dbus_supported(bool *supportedp) {
  *
  * Return: 0 on success, or a negative error code on failure.
  */
-int bus_apparmor_registry_new(struct BusAppArmorRegistry **registryp, const char *fallback_context) {
+int bus_apparmor_registry_new(BusAppArmorRegistry **registryp, const char *fallback_context) {
         _c_cleanup_(bus_apparmor_registry_unrefp) BusAppArmorRegistry *registry = NULL;
         size_t n_fallback_context;
 
@@ -161,7 +162,12 @@ int bus_apparmor_set_bus_type(BusAppArmorRegistry *registry, const char *bustype
         return 0;
 }
 
-static int bus_apparmor_log(BusAppArmorRegistry *registry, const char *fmt, ...) {
+static int bus_apparmor_log(
+        BusAppArmorRegistry *registry,
+        uid_t uid,
+        const char *fmt,
+        ...
+) {
         _c_cleanup_(c_freep) char *message = NULL;
         va_list ap;
         int r;
@@ -172,10 +178,7 @@ static int bus_apparmor_log(BusAppArmorRegistry *registry, const char *fmt, ...)
         if (r < 0)
                 return error_origin(-errno);
 
-        /* XXX: we don't have access to any context, so can't find
-         * the right UID to use, follow dbus-daemon(1) and use our
-         * own. */
-        r = util_audit_log(UTIL_AUDIT_TYPE_AVC, message, getuid());
+        r = util_audit_log(UTIL_AUDIT_TYPE_AVC, message, uid);
         if (r != UTIL_AUDIT_E_UNAVAILABLE) // XXX: use a log fallback
                 return error_fold(r);
 
@@ -213,13 +216,14 @@ static int build_service_query(
         strcpy(qstr+i, bustype);
         i += strlen(bustype) + 1;
         strcpy(qstr+i, name);
+        i += strlen(name) + 1;
 
         *queryp = qstr;
-        *n_queryp = len - 1;
+        *n_queryp = i - 1;
         return 0;
 }
 
-static int build_message_query_name(
+static int build_message_query(
         char **queryp,
         size_t *n_queryp,
         const char *security_label,
@@ -239,10 +243,12 @@ static int build_message_query_name(
         len += strlen(bustype) + 1;
         len += strlen(receiver_context) + 1;
         len += strlen(name) + 1;
-        len += strlen(path) + 1;
+        if (path)
+                len += strlen(path) + 1;
         if (interface)
                 len += strlen(interface) + 1;
-        len += strlen(method) + 1;
+        if (method)
+                len += strlen(method) + 1;
 
         qstr = malloc(len);
         if (!qstr)
@@ -258,16 +264,21 @@ static int build_message_query_name(
         i += strlen(receiver_context) + 1;
         strcpy(qstr+i, name);
         i += strlen(name) + 1;
-        strcpy(qstr+i, path);
-        i += strlen(path) + 1;
+        if (path) {
+                strcpy(qstr+i, path);
+                i += strlen(path) + 1;
+        }
         if (interface) {
                 strcpy(qstr+i, interface);
                 i += strlen(interface) + 1;
         }
-        strcpy(qstr+i, method);
+        if (method) {
+                strcpy(qstr+i, method);
+                i += strlen(method) + 1;
+        }
 
         *queryp = qstr;
-        *n_queryp = len - 1;
+        *n_queryp = i - 1;
         return 0;
 }
 
@@ -293,18 +304,19 @@ static int build_eavesdrop_query(
         i += strlen(security_label) + 1;
         qstr[i++] = AA_CLASS_DBUS;
         strcpy(qstr+i, bustype);
+        i += strlen(bustype) + 1;
 
         *queryp = qstr;
-        *n_queryp = len - 1;
+        *n_queryp = i - 1;
         return 0;
 }
 
-static int apparmor_message_query_name(
-        bool check_send,
+static int apparmor_message_query(
+        uint32_t aa_mask,
         const char *security_label,
         const char *bustype,
         const char *receiver_context,
-        const char *name,
+        const char *src_or_dst,
         const char *path,
         const char *interface,
         const char *method,
@@ -315,13 +327,13 @@ static int apparmor_message_query_name(
         size_t n_qstr;
         int r;
 
-        r = build_message_query_name(
+        r = build_message_query(
                 &qstr,
                 &n_qstr,
                 security_label,
                 bustype,
                 receiver_context,
-                name,
+                src_or_dst,
                 path,
                 interface,
                 method
@@ -330,99 +342,14 @@ static int apparmor_message_query_name(
                 return error_fold(r);
 
         r = aa_query_label(
-                check_send ? AA_DBUS_SEND : AA_DBUS_RECEIVE,
+                aa_mask,
                 qstr,
                 n_qstr,
                 allow,
                 audit
         );
         if (r)
-                return error_origin(-c_errno());
-
-        return 0;
-}
-
-static int apparmor_message_query(
-        bool check_send,
-        const char *security_label,
-        const char *bustype,
-        const char *receiver_context,
-        NameSet *nameset,
-        uint64_t subject_id,
-        const char *path,
-        const char *interface,
-        const char *method,
-        int *allow,
-        int *audit
-) {
-        NameOwnership *ownership;
-        int r, audit_tmp = 0;
-        size_t i;
-
-        if (!nameset) {
-                r = apparmor_message_query_name(
-                        check_send, security_label, bustype,
-                        receiver_context, "org.freedesktop.DBus",
-                        path, interface, method, allow, audit
-                );
-                if (r)
-                        return error_fold(r);
-        } else if (nameset->type == NAME_SET_TYPE_OWNER) {
-                if (c_rbtree_is_empty(&nameset->owner->ownership_tree)) {
-                        struct Address addr;
-
-                        address_init_from_id(&addr, subject_id);
-
-                        r = apparmor_message_query_name(
-                                check_send, security_label, bustype,
-                                receiver_context, address_to_string(&addr),
-                                path, interface, method, allow, audit
-                        );
-                        if (r)
-                                return error_fold(r);
-                } else {
-                        *allow = 0;
-                        *audit = 0;
-
-                        c_rbtree_for_each_entry(ownership, &nameset->owner->ownership_tree, owner_node) {
-                                r = apparmor_message_query_name(
-                                        check_send, security_label,
-                                        bustype, receiver_context,
-                                        ownership->name->name, path,
-                                        interface, method, allow, &audit_tmp
-                                );
-                                if (r)
-                                        return error_fold(r);
-                                if (audit_tmp)
-                                        *audit = 1;
-                                if (!*allow)
-                                        return 0;
-                        }
-                }
-        } else if (nameset->type == NAME_SET_TYPE_SNAPSHOT) {
-                *allow = 0;
-                *audit = 0;
-
-                for (i = 0; i < nameset->snapshot->n_names; ++i) {
-                        r = apparmor_message_query_name(
-                                check_send, security_label, bustype,
-                                receiver_context,
-                                nameset->snapshot->names[i]->name,
-                                path, interface, method, allow, &audit_tmp
-                        );
-                        if (r)
-                                return error_fold(r);
-                        if (audit_tmp)
-                                *audit = 1;
-                        if (!*allow)
-                                return 0;
-                }
-        } else if (nameset->type == NAME_SET_TYPE_EMPTY) {
-                *allow = 0;
-                *audit = 1;
-        } else {
-                return error_origin(-ENOTRECOVERABLE);
-        }
+                return error_origin(-errno);
 
         return 0;
 }
@@ -430,7 +357,8 @@ static int apparmor_message_query(
 /**
  * bus_apparmor_check_own() - check if the given transaction is allowed
  * @registry:           AppArmor registry to operate on
- * @owner_context:      security context requesting the name
+ * @context:            security context requesting the name
+ * @uid:                uid of the requester
  * @name:               name to be owned
  *
  * Check if the given owner context is allowed to own the given name.
@@ -438,9 +366,12 @@ static int apparmor_message_query(
  * Return: 0 if the ownership is allowed, BUS_APPARMOR_E_DENIED if it is not,
  *         or a negative error code on failure.
  */
-int bus_apparmor_check_own(struct BusAppArmorRegistry *registry,
-                           const char *owner_context,
-                           const char *name) {
+int bus_apparmor_check_own(
+        BusAppArmorRegistry *registry,
+        const char *context,
+        uid_t uid,
+        const char *name
+) {
         _c_cleanup_(c_freep) char *condup = NULL, *qstr = NULL;
         char *security_label, *security_mode;
         int r, allow, audit;
@@ -449,7 +380,7 @@ int bus_apparmor_check_own(struct BusAppArmorRegistry *registry,
         if (!registry->bustype)
                 return 0;
 
-        condup = strdup(owner_context);
+        condup = strdup(context);
         if (!condup)
                 return error_origin(-ENOMEM);
 
@@ -470,20 +401,29 @@ int bus_apparmor_check_own(struct BusAppArmorRegistry *registry,
 
         r = aa_query_label(AA_DBUS_BIND, qstr, n_qstr, &allow, &audit);
         if (r)
-                return error_origin(-c_errno());
+                return error_origin(-errno);
 
         if (string_equal(security_mode, "complain"))
                 allow = true;
 
-        if (audit)
-                bus_apparmor_log(
+        if (audit) {
+                r = bus_apparmor_log(
                         registry,
-                        "apparmor=\"%s\" operation=\"dbus_bind\" "
-                        "bus=\"%s\" name=\"%s\" mask=\"bind\"",
+                        uid,
+                        "apparmor=\"%s\""
+                        " operation=\"dbus_bind\""
+                        " bus=\"%s\""
+                        " name=\"%s\""
+                        " mask=\"bind\"",
+                        " label=\"%s\"",
                         allow ? "ALLOWED" : "DENIED",
                         registry->bustype,
-                        name
+                        name,
+                        security_label
                 );
+                if (r)
+                        return error_fold(r);
+        }
 
         return allow ? 0 : BUS_APPARMOR_E_DENIED;
 }
@@ -492,39 +432,54 @@ int bus_apparmor_check_own(struct BusAppArmorRegistry *registry,
  * bus_apparmor_check_send() - check if the given transaction is allowed
  * @registry:           AppArmor registry to operate on
  * @sender_context:     security context of the sender
+ * @sender_uid:         uid of the sender
+ * @sender_id:          DBus ID of the sender
  * @receiver_context:   security context of the receiver, or NULL
- * @subject:            List of names
- * @subject_id:         Unique ID of the subject
- * @path:               Dbus object path
- * @interface:          DBus method interface
- * @method:             DBus method that is being called
+ * @destination:        DBus message destination, or NULL
+ * @path:               DBus object path
+ * @interface:          DBus method interface, or NULL
+ * @method:             DBus method that is being called, or NULL
+ * @type:               DBus message type
  *
  * Check if the given sender context is allowed to send/receive a message
  * to the given receiver context. If the any context is given as NULL,
  * the per-registry fallback context is used instead.
  *
- * In case multiple names are available all are being checked and the function
- * will deny access if any of them is denied by AppArmor.
- *
  * Return: 0 if the transaction is allowed, BUS_APPARMOR_E_DENIED if it is not,
  *         or a negative error code on failure.
  */
-int bus_apparmor_check_send(BusAppArmorRegistry *registry,
-                            const char *sender_context,
-                            const char *receiver_context,
-                            NameSet *subject,
-                            uint64_t subject_id,
-                            const char *path,
-                            const char *interface,
-                            const char *method) {
+int bus_apparmor_check_send(
+        BusAppArmorRegistry *registry,
+        const char *sender_context,
+        uid_t sender_uid,
+        uint64_t sender_id,
+        const char *receiver_context,
+        const char *destination,
+        const char *path,
+        const char *interface,
+        const char *method,
+        unsigned int type
+) {
         _c_cleanup_(c_freep) char *sender_context_dup = NULL;
         _c_cleanup_(c_freep) char *receiver_context_dup = NULL;
+        struct Address sender_addr;
+        const char *op = NULL, *sender_name = NULL;
         char *sender_security_label, *sender_security_mode;
         char *receiver_security_label, *receiver_security_mode;
         int r, src_allow = false, src_audit = true, dst_allow = false, dst_audit = true;
 
         if (!registry->bustype)
                 return 0;
+
+        address_init_from_id(&sender_addr, sender_id);
+        sender_name = address_to_string(&sender_addr);
+
+        /*
+         * dbus-daemon(1) uses this fallback, so we follow suit.
+         * This is bogus for broadcasts (or any message without
+         * destination), but lets keep compatibility.
+         */
+        destination = destination ?: "org.freedesktop.DBus";
 
         sender_context_dup = strdup(sender_context ?: registry->fallback_context);
         if (!sender_context_dup)
@@ -540,13 +495,18 @@ int bus_apparmor_check_send(BusAppArmorRegistry *registry,
                 src_allow = true;
                 src_audit = false;
         } else {
-                r = apparmor_message_query(true,
-                                           sender_security_label,
-                                           registry->bustype,
-                                           receiver_security_label,
-                                           subject, subject_id, path,
-                                           interface, method, &src_allow, &src_audit);
-
+                r = apparmor_message_query(
+                        AA_DBUS_SEND,
+                        sender_security_label,
+                        registry->bustype,
+                        receiver_security_label,
+                        destination,
+                        path,
+                        interface,
+                        method,
+                        &src_allow,
+                        &src_audit
+                );
                 if (r)
                         return error_fold(r);
         }
@@ -555,12 +515,18 @@ int bus_apparmor_check_send(BusAppArmorRegistry *registry,
                 dst_allow = true;
                 dst_audit = false;
         } else {
-                r = apparmor_message_query(false,
-                                           receiver_security_label,
-                                           registry->bustype,
-                                           sender_security_label,
-                                           subject, subject_id, path,
-                                           interface, method, &dst_allow, &dst_audit);
+                r = apparmor_message_query(
+                        AA_DBUS_RECEIVE,
+                        receiver_security_label,
+                        registry->bustype,
+                        sender_security_label,
+                        sender_name,
+                        path,
+                        interface,
+                        method,
+                        &dst_allow,
+                        &dst_audit
+                );
                 if (r)
                         return error_fold(r);
         }
@@ -570,34 +536,77 @@ int bus_apparmor_check_send(BusAppArmorRegistry *registry,
         if (string_equal(receiver_security_mode, "complain"))
                 dst_allow = 1;
 
+        switch (type) {
+        case DBUS_MESSAGE_TYPE_METHOD_CALL:
+                op = "method_call";
+                break;
+        case DBUS_MESSAGE_TYPE_METHOD_RETURN:
+                op = "method_return";
+                break;
+        case DBUS_MESSAGE_TYPE_ERROR:
+                op = "error";
+                break;
+        case DBUS_MESSAGE_TYPE_SIGNAL:
+                op = "signal";
+                break;
+        default:
+                return error_origin(-ENOTRECOVERABLE);
+        }
+
         if (src_audit) {
-                bus_apparmor_log(registry,
-                        "apparmor=\"%s\" operation=\"dbus_method_call\" "
-                        "bus=\"%s\" path=\"%s\" interface=\"%s\" method=\"%s\" "
-                        "mask=\"send\" label=\"%s\" peer_label=\"%s\"",
+                r = bus_apparmor_log(
+                        registry,
+                        sender_uid,
+                        "apparmor=\"%s\""
+                        " operation=\"dbus_%s\""
+                        " bus=\"%s\""
+                        " path=\"%s\""
+                        " interface=\"%s\""
+                        " member=\"%s\""
+                        " mask=\"send\""
+                        " name=\"%s\""
+                        " label=\"%s\""
+                        " peer_label=\"%s\"",
                         src_allow ? "ALLOWED" : "DENIED",
+                        op,
                         registry->bustype,
-                        path,
-                        interface,
-                        method,
+                        path ?: "",
+                        interface ?: "",
+                        method ?: "",
+                        destination,
                         sender_security_label,
                         receiver_security_label
                 );
+                if (r)
+                        return error_fold(r);
         }
 
         if (dst_audit) {
-                bus_apparmor_log(registry,
-                        "apparmor=\"%s\" operation=\"dbus_method_call\" "
-                        "bus=\"%s\" path=\"%s\" interface=\"%s\" method=\"%s\" "
-                        "mask=\"receive\" label=\"%s\" peer_label=\"%s\"",
+                r = bus_apparmor_log(
+                        registry,
+                        sender_uid,
+                        "apparmor=\"%s\""
+                        " operation=\"dbus_%s\""
+                        " bus=\"%s\""
+                        " path=\"%s\""
+                        " interface=\"%s\""
+                        " member=\"%s\""
+                        " mask=\"receive\""
+                        " name=\"%s\""
+                        " label=\"%s\""
+                        " peer_label=\"%s\"",
                         dst_allow ? "ALLOWED" : "DENIED",
+                        op,
                         registry->bustype,
-                        path,
-                        interface,
-                        method,
+                        path ?: "",
+                        interface ?: "",
+                        method ?: "",
+                        sender_name,
                         receiver_security_label,
                         sender_security_label
                 );
+                if (r)
+                        return error_fold(r);
         }
 
         return (src_allow && dst_allow) ? 0 : BUS_APPARMOR_E_DENIED;
@@ -607,15 +616,18 @@ int bus_apparmor_check_send(BusAppArmorRegistry *registry,
  * bus_apparmor_check_eavesdrop() - check if the given context may eavesdrop
  * @registry:           AppArmor registry to operate on
  * @context:            security context that wants to eavesdrop
+ * @uid:                uid of the calling user
  *
  * Check if the given sender context is allowed to do eavesdropping.
  *
  * Return: 0 if the transaction is allowed, BUS_APPARMOR_E_DENIED if it is not,
  *         or a negative error code on failure.
  */
-int bus_apparmor_check_eavesdrop(BusAppArmorRegistry *registry,
-                                 const char *context)
-{
+int bus_apparmor_check_eavesdrop(
+        BusAppArmorRegistry *registry,
+        const char *context,
+        uid_t uid
+) {
         _c_cleanup_(c_freep) char *condup = NULL, *qstr = NULL;
         char *security_label, *security_mode;
         int r, allow, audit;
@@ -644,20 +656,27 @@ int bus_apparmor_check_eavesdrop(BusAppArmorRegistry *registry,
 
         r = aa_query_label(AA_DBUS_EAVESDROP, qstr, n_qstr, &allow, &audit);
         if (r)
-                return error_origin(-c_errno());
+                return error_origin(-errno);
 
         if (string_equal(security_mode, "complain"))
                 allow = 1;
 
-        if (audit)
-                bus_apparmor_log(
+        if (audit) {
+                r = bus_apparmor_log(
                         registry,
-                        "apparmor=\"%s\" operation=\"dbus_eavesdrop\" "
-                        "bus=\"%s\" label=\"%s\"",
+                        uid,
+                        "apparmor=\"%s\""
+                        " operation=\"dbus_eavesdrop\""
+                        " bus=\"%s\""
+                        " mask=\"eavesdrop\""
+                        " label=\"%s\"",
                         allow ? "ALLOWED" : "DENIED",
                         registry->bustype,
-                        context
+                        security_label
                 );
+                if (r)
+                        return error_fold(r);
+        }
 
         return allow ? 0 : BUS_APPARMOR_E_DENIED;
 }

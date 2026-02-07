@@ -685,16 +685,16 @@ static int driver_notify_name_owner_changed(Bus *bus, MatchRegistry *matches, co
 
                         c_list_unlink(&match_owner->destinations_link);
 
-                        r = policy_snapshot_check_receive(receiver->policy,
-                                                          NULL,
-                                                          NULL,
-                                                          0,
-                                                          metadata.fields.interface,
-                                                          metadata.fields.member,
-                                                          metadata.fields.path,
-                                                          metadata.header.type,
-                                                          true,
-                                                          0);
+                        r = policy_snapshot_check_receive(
+                                receiver->policy,
+                                NULL,
+                                metadata.fields.interface,
+                                metadata.fields.member,
+                                metadata.fields.path,
+                                metadata.header.type,
+                                true,
+                                0
+                        );
                         if (r) {
                                 if (r == POLICY_E_ACCESS_DENIED ||
                                     r == POLICY_E_SELINUX_ACCESS_DENIED ||
@@ -1896,7 +1896,11 @@ static int driver_method_become_monitor(Peer *peer, const char *path, CDVar *in_
         if (!peer_is_privileged(peer))
                 return DRIVER_E_PEER_NOT_PRIVILEGED;
 
-        r = bus_apparmor_check_eavesdrop(peer->policy->apparmor, peer->policy->seclabel);
+        r = bus_apparmor_check_eavesdrop(
+                peer->policy->apparmor,
+                peer->policy->seclabel,
+                peer->user->uid
+        );
         if (r == BUS_APPARMOR_E_DENIED)
                 return DRIVER_E_PEER_NOT_PRIVILEGED;
         else if (r)
@@ -2466,7 +2470,19 @@ static int driver_dispatch_interface(Peer *peer, uint32_t serial, const char *in
                 /* ignore */
                 return 0;
 
-        r = policy_snapshot_check_send(peer->policy, NULL, NULL, 0, interface, member, path, message->header->type, false, message->metadata.fields.unix_fds);
+        r = policy_snapshot_check_send(
+                peer->policy,
+                peer->id,
+                NULL,
+                NULL,
+                "org.freedesktop.DBus",
+                interface,
+                member,
+                path,
+                message->header->type,
+                false,
+                message->metadata.fields.unix_fds
+        );
         if (r) {
                 if (r == POLICY_E_ACCESS_DENIED ||
                     r == POLICY_E_SELINUX_ACCESS_DENIED ||
@@ -2625,16 +2641,19 @@ static int driver_forward_broadcast(Peer *sender, Message *message) {
 
                 c_list_unlink(&match_owner->destinations_link);
 
-                r = policy_snapshot_check_send(sender->policy,
-                                               receiver->seclabel,
-                                               &receiver_names,
-                                               receiver->id,
-                                               message->metadata.fields.interface,
-                                               message->metadata.fields.member,
-                                               message->metadata.fields.path,
-                                               message->metadata.header.type,
-                                               true,
-                                               message->metadata.fields.unix_fds);
+                r = policy_snapshot_check_send(
+                        sender->policy,
+                        sender->id,
+                        receiver->seclabel,
+                        &receiver_names,
+                        message->metadata.fields.destination,
+                        message->metadata.fields.interface,
+                        message->metadata.fields.member,
+                        message->metadata.fields.path,
+                        message->metadata.header.type,
+                        true,
+                        message->metadata.fields.unix_fds
+                );
                 if (r) {
                         if (r == POLICY_E_ACCESS_DENIED ||
                             r == POLICY_E_SELINUX_ACCESS_DENIED ||
@@ -2644,16 +2663,16 @@ static int driver_forward_broadcast(Peer *sender, Message *message) {
                         return error_fold(r);
                 }
 
-                r = policy_snapshot_check_receive(receiver->policy,
-                                                  sender->seclabel,
-                                                  &sender_names,
-                                                  sender->id,
-                                                  message->metadata.fields.interface,
-                                                  message->metadata.fields.member,
-                                                  message->metadata.fields.path,
-                                                  message->metadata.header.type,
-                                                  true,
-                                                  message->metadata.fields.unix_fds);
+                r = policy_snapshot_check_receive(
+                        receiver->policy,
+                        &sender_names,
+                        message->metadata.fields.interface,
+                        message->metadata.fields.member,
+                        message->metadata.fields.path,
+                        message->metadata.header.type,
+                        true,
+                        message->metadata.fields.unix_fds
+                );
                 if (r) {
                         if (r == POLICY_E_ACCESS_DENIED ||
                             r == POLICY_E_SELINUX_ACCESS_DENIED ||
